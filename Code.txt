@@ -1,0 +1,133 @@
+#0 Import libraries
+import pandas as pd
+import numpy as np
+from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import openpyxl
+
+#1 Read xlsx file
+df = pd.read_excel('Input.xlsx')
+
+#2 Get station list
+weatherstations = list(df.columns[1:])
+
+#3 Get date range from DataFrame
+initial_date = df['Date'].min()
+final_date = df['Date'].max()
+
+#4 Create figure with n subgraphs
+fig, axs = plt.subplots(len(weatherstations), 1, figsize=(8, 2*len(weatherstations)))
+
+#5 Plot precipitation data for each station
+for i, weatherstation in enumerate(weatherstations):
+    axs[i].plot(df['Date'], df[weatherstation])
+    axs[i].set_ylabel('Precipitation')
+    axs[i].set_title(weatherstation)
+    axs[i].set_xlim([initial_date, final_date]) # set the same date range on all subcharts
+    axs[i].set_ylim([0, 180]) # set the same Y range on all subcharts
+plt.tight_layout() # adjust subplots
+# ¡¡¡¡If you want to save the figure before closing it, remove the # from the next two lines!!!!
+#plt.savefig('Measured_data.pdf')
+#plt.show()
+
+# 6 Ask the user how many base weather stations they want to use
+while True:
+    answer = input("How many base weather stations do you want to use, 1 or 2? ")
+    if answer in ["1", "2"]:
+        break
+    print("invalid answer. Please enter 1 or 2.")
+	
+#7 Estimate missing data using neural networks
+if answer == "1":
+    print("The calculation will be carried out with a base station")
+    #7.1 Create new csv files
+    for i, col in enumerate(df.columns[2:], start=1):
+        new_df = df.iloc[:, [0, 1, i+1]].copy()
+        new_df.columns = ['Date', 'EstA', 'EstB']
+        new_df.to_csv('Archive_' + str(i) + '.csv', index=False) 
+    #8 Cycle to Read the previously created CSV files, train a neural network and calculate the missing data to save it to a csv file
+    for i in range(1, len(df.columns)-1):
+        # Read the archive
+        PreDat = pd.read_csv('Archive_' + str(i) + '.csv', index_col=0, parse_dates=True)
+        # Delete rows with missing data
+        PreSinNaN = PreDat.dropna()
+        # Define data
+        xTrain = PreSinNaN[['EstA']]
+        yTrain = PreSinNaN[['EstB']].values.flatten()
+        # Scale data
+        scaler = StandardScaler().fit(xTrain.values)
+        xTrainScaled = scaler.transform(xTrain.values)
+        # Regressor
+        regr = MLPRegressor(random_state=1, max_iter=5000, activation='relu').fit(xTrainScaled, yTrain)
+        # Prueba
+        xTest = PreDat[['EstA']].dropna()
+        xTestScaled = scaler.transform(xTest.values)
+        # Regression
+        yPredict = regr.predict(xTestScaled)
+        # Apply exit restriction
+        yPredict = np.maximum(yPredict, 0)  # Set negative values to zero # ¡¡¡¡This row can be deleted if you want to use the code for other data that can be found as negative!!!!
+        # Create new column with measured data and replace missing data with calculated data
+        PreDat['EstBCompleted'] = 0
+        for index, row in PreDat.iterrows():
+            if np.isnan(row['EstB']) and ~np.isnan(row['EstA']):
+                rowScaled = scaler.transform([[row['EstA']]])
+                PreDat.loc[index,['EstBCompleted']] = regr.predict(rowScaled)
+            elif ~np.isnan(row['EstB']):
+                PreDat.loc[index,['EstBCompleted']] = row['EstB']
+            else:
+                row['EstBCompleted'] = np.nan
+        # Create DataFrame with the data to save
+        data_to_save = pd.concat([PreDat['EstA'], PreDat['EstB'], PreDat['EstBCompleted']], axis=1)
+        data_to_save.columns = ['EstA', 'EstB', 'EstBCompleted']
+        # Save DataFrame to CSV file
+        data_to_save.to_csv('Calculated_for_' + str(i) + '.csv', index=True)
+else: 
+    print("The calculation is carried out with two base weather stations")
+    #7.1 Create new csv files
+    for i, col in enumerate(df.columns[2:], start=1):
+        new_df = df.iloc[:, [0, 1, 2, i+1]].copy()
+        new_df.columns = ['Date', 'EstA1', 'EstA2', 'EstB']
+        new_df.to_csv('Archive_' + str(i) + '.csv', index=False)
+        #8 Cycle to Read the previously created CSV files, train a neural network and calculate the missing data to save it to a csv file
+    for i in range(1, len(df.columns)-1):
+        # Read the archive
+        PreDat =  pd.read_csv('Archive_' + str(i) + '.csv',index_col=0,parse_dates=True)
+        # Delete rows with missing data
+        PreSinNaN = PreDat.dropna()
+        # Define data
+        xTrain = PreSinNaN[['EstA1', 'EstA2']]
+        yTrain = PreSinNaN[['EstB']].values.flatten()
+        # Scale data
+        scaler = StandardScaler().fit(xTrain.values)
+        xTrainScaled = scaler.transform(xTrain.values)
+        # Regressor
+        regr = MLPRegressor(random_state=1, max_iter=5000).fit(xTrainScaled, yTrain)
+        # Prueba 
+        xTest = PreDat[['EstA1', 'EstA2']].dropna()
+        xTestScaled = scaler.transform(xTest.values)
+        # Regression
+        yPredict = regr.predict(xTestScaled)
+        # Apply exit restriction
+        yPredict = np.maximum(yPredict, 0)  # Set negative values to zero # ¡¡¡¡This row can be deleted if you want to use the code for other data that can be found as negative!!!!
+        # Create new column with measured data and replace missing data with calculated data
+        PreDat['EstBCompleted'] = 0
+        PreDat['EstBNeural'] = 0
+        for index, row in PreDat.iterrows():
+            if np.isnan(row['EstB']) and ~np.isnan(row['EstA1'])and ~np.isnan(row['EstA2']):
+                rowScaled = scaler.transform([[row['EstA1'],row['EstA2']]])
+                PreDat.loc[index,['EstBCompleted']] = regr.predict(rowScaled)
+                PreDat.loc[index,['EstBNeural']] = regr.predict(rowScaled)
+            elif ~np.isnan(row['EstB']):
+                PreDat.loc[index,['EstBCompleted']] = row['EstB']
+                PreDat.loc[index,['EstBNeural']] = row['EstB']
+            else:
+                row['EstBCompleted'] = np.nan
+                row['EstBNeural'] = np.nan
+        # Create DataFrame with the data to save
+        data_to_save = pd.concat([PreDat['EstA'], PreDat['EstB'], PreDat['EstBCompleted']], axis=1)
+        data_to_save.columns = ['EstA', 'EstB', 'EstBCompleted']
+        # Save DataFrame to CSV file
+        data_to_save.to_csv('Calculated_for_' + str(i) + '.csv', index=True)
+print("End")
